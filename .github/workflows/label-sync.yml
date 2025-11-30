@@ -19,18 +19,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect Label (only for labeled event)
+      ####################################################################
+      # Detect label
+      ####################################################################
+      - name: Detect Label
         id: detect_label
         if: github.event.action == 'labeled'
-        run: echo "label_name=${{ github.event.label.name }}" >> $GITHUB_OUTPUT
+        run: echo "label=${{ github.event.label.name }}" >> $GITHUB_OUTPUT
 
-      - name: Determine target branch
+      ####################################################################
+      # Determine Target Branch
+      ####################################################################
+      - name: Determine Target Branch
         id: target
         if: github.event.action == 'labeled'
         run: |
-          if [ "${{ steps.detect_label.outputs.label_name }}" = "dev" ]; then
+          if [ "${{ steps.detect_label.outputs.label }}" = "dev" ]; then
             echo "branch=dev" >> $GITHUB_OUTPUT
-          elif [ "${{ steps.detect_label.outputs.label_name }}" = "stage" ]; then
+          elif [ "${{ steps.detect_label.outputs.label }}" = "stage" ]; then
             echo "branch=stage" >> $GITHUB_OUTPUT
           else
             echo "branch=" >> $GITHUB_OUTPUT
@@ -40,19 +46,31 @@ jobs:
         if: github.event.action == 'labeled' && steps.target.outputs.branch == ''
         run: echo "No valid sync label"
 
-      - name: Create Sync PR (dev/stage)
+      ####################################################################
+      # Create Sync PR (dev/stage)
+      ####################################################################
+      - name: Create Sync PR
         id: create_sync
         if: github.event.action == 'labeled' && steps.target.outputs.branch != ''
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           title: "Sync: ${{ github.event.pull_request.head.ref }} → ${{ steps.target.outputs.branch }}"
-          body: "Auto-created due to **${{ steps.detect_label.outputs.label_name }}** label."
+          body: |
+            This is an auto-created **Sync PR**.
+
+            It updates `${{ steps.target.outputs.branch }}` with latest commits from:
+            - **Feature:** `${{ github.event.pull_request.head.ref }}`
+            - **Main PR:** #${{ github.event.pull_request.number }}
+
           base: ${{ steps.target.outputs.branch }}
           branch: "sync/${{ github.event.pull_request.number }}-${{ steps.target.outputs.branch }}"
           delete-branch: false
 
-      - name: Comment Sync PR link on Main PR
+      ####################################################################
+      # Comment Sync PR link on MAIN PR
+      ####################################################################
+      - name: Comment Sync PR Link
         if: github.event.action == 'labeled' && steps.target.outputs.branch != ''
         uses: peter-evans/create-or-update-comment@v4
         with:
@@ -60,22 +78,26 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           body: |
             🔄 A new **Sync PR** has been created!
+
             **Target branch:** `${{ steps.target.outputs.branch }}`
-            👉 PR link: ${{ steps.create_sync.outputs.pull-request-url }}
+            👉 **Sync PR Link:** ${{ steps.create_sync.outputs.pull-request-url }}
 
-            Merge this sync PR to update `${{ steps.target.outputs.branch }}` branch.
+            Merge this Sync PR to update `${{ steps.target.outputs.branch }}`.
 
-      # AUTO SYNC existing PR when new commits are pushed to feature
-      - name: Auto-sync existing PR when commits updated (for synchronize event)
+      ####################################################################
+      # Auto-sync: update Sync PR when new commits are pushed
+      ####################################################################
+      - name: Auto-sync when commits updated
         if: github.event.action == 'synchronize'
         run: |
           TARGETS=("dev" "stage")
           for target in "${TARGETS[@]}"; do
-            BRANCH="sync/${{ github.event.pull_request.number }}-$target"
-            if git ls-remote --exit-code origin $BRANCH; then
-              echo "Updating sync PR branch: $BRANCH"
-              git push origin HEAD:$BRANCH -f
+            SYNC_BRANCH="sync/${{ github.event.pull_request.number }}-$target"
+
+            if git ls-remote --exit-code origin $SYNC_BRANCH; then
+              echo "Updating $SYNC_BRANCH ..."
+              git push origin HEAD:$SYNC_BRANCH -f
             else
-              echo "No sync branch found for $target"
+              echo "No sync branch for $target"
             fi
           done
