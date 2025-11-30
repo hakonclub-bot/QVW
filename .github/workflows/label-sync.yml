@@ -1,9 +1,12 @@
-
 name: Create Sync PR Based on Label
 
 on:
   pull_request:
     types: [labeled]
+
+# allow the action to create PRs / push commits
+permissions:
+  contents: write
 
 jobs:
   create-sync-pr:
@@ -11,6 +14,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Extract label added
         id: label
         run: echo "label_name=${{ github.event.label.name }}" >> $GITHUB_OUTPUT
@@ -38,5 +46,5 @@ jobs:
           title: "Sync: ${{ github.event.pull_request.head.ref }} → ${{ steps.target.outputs.branch }}"
           body: "Auto-created because label **${{ steps.label.outputs.label_name }}** was added."
           base: ${{ steps.target.outputs.branch }}
-          branch: "sync/${{ github.event.pull_request.number }}-${{ steps.target.outputs.branch }}"
-          delete-branch: true
+          branch: "sync/${{ github.event.pull_request.number }}-to-${{ steps.target.outputs.branch }}"
+          delete-branch: false
