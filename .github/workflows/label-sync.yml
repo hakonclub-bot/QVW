@@ -1,0 +1,41 @@
+name: Create Sync PR Based on Label
+
+on:
+  pull_request:
+    types: [labeled]
+
+jobs:
+  create-sync-pr:
+    if: github.event.pull_request.state == 'open'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract label added
+        id: label
+        run: echo "label_name=${{ github.event.label.name }}" >> $GITHUB_OUTPUT
+
+      - name: Decide target branch
+        id: target
+        run: |
+          if [ "${{ steps.label.outputs.label_name }}" = "dev" ]; then
+            echo "branch=dev" >> $GITHUB_OUTPUT
+          elif [ "${{ steps.label.outputs.label_name }}" = "stage" ]; then
+            echo "branch=stage" >> $GITHUB_OUTPUT
+          else
+            echo "branch=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Stop if no valid label
+        if: steps.target.outputs.branch == ''
+        run: echo "No matching label – stopping."
+
+      - name: Create PR
+        if: steps.target.outputs.branch != ''
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "Sync: ${{ github.event.pull_request.head.ref }} → ${{ steps.target.outputs.branch }}"
+          body: "Auto-created because label **${{ steps.label.outputs.label_name }}** was added."
+          base: ${{ steps.target.outputs.branch }}
+          branch: "sync/${{ github.event.pull_request.number }}-${{ steps.target.outputs.branch }}"
+          delete-branch: true
