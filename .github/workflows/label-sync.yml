@@ -1,50 +1,81 @@
-name: Create Sync PR Based on Label
+name: Create and Sync PR Based on Label
 
 on:
   pull_request:
-    types: [labeled]
+    types: [labeled, synchronize]
 
-# allow the action to create PRs / push commits
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
-  create-sync-pr:
-    if: github.event.pull_request.state == 'open'
+  sync-pr:
     runs-on: ubuntu-latest
+    if: github.event.pull_request.state == 'open'
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Extract label added
-        id: label
+      - name: Detect Label (only for labeled event)
+        id: detect_label
+        if: github.event.action == 'labeled'
         run: echo "label_name=${{ github.event.label.name }}" >> $GITHUB_OUTPUT
 
-      - name: Decide target branch
+      - name: Determine target branch
         id: target
+        if: github.event.action == 'labeled'
         run: |
-          if [ "${{ steps.label.outputs.label_name }}" = "dev" ]; then
+          if [ "${{ steps.detect_label.outputs.label_name }}" = "dev" ]; then
             echo "branch=dev" >> $GITHUB_OUTPUT
-          elif [ "${{ steps.label.outputs.label_name }}" = "stage" ]; then
+          elif [ "${{ steps.detect_label.outputs.label_name }}" = "stage" ]; then
             echo "branch=stage" >> $GITHUB_OUTPUT
           else
             echo "branch=" >> $GITHUB_OUTPUT
           fi
 
       - name: Stop if no valid label
-        if: steps.target.outputs.branch == ''
-        run: echo "No matching label – stopping."
+        if: github.event.action == 'labeled' && steps.target.outputs.branch == ''
+        run: echo "No valid sync label"
 
-      - name: Create PR
-        if: steps.target.outputs.branch != ''
+      - name: Create Sync PR (dev/stage)
+        id: create_sync
+        if: github.event.action == 'labeled' && steps.target.outputs.branch != ''
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           title: "Sync: ${{ github.event.pull_request.head.ref }} → ${{ steps.target.outputs.branch }}"
-          body: "Auto-created because label **${{ steps.label.outputs.label_name }}** was added."
+          body: "Auto-created due to **${{ steps.detect_label.outputs.label_name }}** label."
           base: ${{ steps.target.outputs.branch }}
-          branch: "sync/${{ github.event.pull_request.number }}-to-${{ steps.target.outputs.branch }}"
+          branch: "sync/${{ github.event.pull_request.number }}-${{ steps.target.outputs.branch }}"
           delete-branch: false
+
+      - name: Comment Sync PR link on Main PR
+        if: github.event.action == 'labeled' && steps.target.outputs.branch != ''
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            🔄 A new **Sync PR** has been created!
+            **Target branch:** `${{ steps.target.outputs.branch }}`
+            👉 PR link: ${{ steps.create_sync.outputs.pull-request-url }}
+
+            Merge this sync PR to update `${{ steps.target.outputs.branch }}` branch.
+
+      # AUTO SYNC existing PR when new commits are pushed to feature
+      - name: Auto-sync existing PR when commits updated (for synchronize event)
+        if: github.event.action == 'synchronize'
+        run: |
+          TARGETS=("dev" "stage")
+          for target in "${TARGETS[@]}"; do
+            BRANCH="sync/${{ github.event.pull_request.number }}-$target"
+            if git ls-remote --exit-code origin $BRANCH; then
+              echo "Updating sync PR branch: $BRANCH"
+              git push origin HEAD:$BRANCH -f
+            else
+              echo "No sync branch found for $target"
+            fi
+          done
